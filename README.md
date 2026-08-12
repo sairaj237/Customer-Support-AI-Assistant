@@ -56,7 +56,7 @@ This is a Customer Support AI Assistant built as a technical challenge. It handl
 
 ---
 
-## Interview Questions
+## Questions
 
 ### 1. Tell us about one technical problem you personally got stuck on.
 I recently got stuck on a CORS error when trying to fetch data from an external API in my frontend. At first, I tried changing the fetch headers, but that failed. I investigated by checking the Network tab in Chrome DevTools and reading the API docs. I eventually solved it by setting up a proxy API route in my Next.js backend to make the request from the server side instead of the browser.
