@@ -1,9 +1,15 @@
-export async function triggerEscalationWebhook(data: {
+export interface EscalationPayload {
   conversation_id: string;
   customer_message: string;
   classified_category: string;
   reason: string;
-}) {
+  urgency_score: number;
+  sentiment_score: number;
+  escalation_probability: number;
+  department: string;
+}
+
+export async function triggerEscalationWebhook(data: EscalationPayload) {
   const webhookUrl = process.env.N8N_WEBHOOK_URL;
   if (!webhookUrl) {
     console.error("No N8N_WEBHOOK_URL configured. Escalation data:", data);

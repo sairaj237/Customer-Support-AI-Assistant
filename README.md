@@ -7,7 +7,8 @@ This is a Customer Support AI Assistant built as a technical challenge. It handl
 - **Frontend:** Next.js (App Router) + React + Tailwind CSS
 - **Backend:** Next.js API Routes (`/api/chat`)
 - **Database:** Supabase (PostgreSQL)
-- **AI/LLM:** OpenAI API (using `ai` SDK for structured outputs/generation)
+- **Triage/Classification:** TypeSafe AI Jev model via OpenRouter Decisions API (`~typesafe/jev-latest`)
+- **AI/LLM:** OpenRouter (`openrouter/auto:free`) via `ai` SDK for response generation
 - **Automation:** n8n Webhook for escalation events
 
 ## Setup Instructions
@@ -15,7 +16,10 @@ This is a Customer Support AI Assistant built as a technical challenge. It handl
 ### 1. Supabase Setup
 1. Create a new Supabase project.
 2. Go to the SQL Editor in your Supabase dashboard.
-3. Copy the contents of `supabase/migrations/00001_initial_schema.sql` and run it to create the necessary tables and policies.
+3. Run `supabase/migrations/00001_initial_schema.sql` to create the base tables.
+4. Run `supabase/migrations/00002_jev_triage.sql` to add triage columns to `escalations` and create the `ticket_triage` table.
+
+Alternatively, use the Supabase CLI: `npx supabase db push`
 
 ### 2. n8n Setup
 1. Open your n8n instance.
@@ -30,7 +34,7 @@ This is a Customer Support AI Assistant built as a technical challenge. It handl
    ```env
    NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-   OPENAI_API_KEY=your_openai_api_key
+   OPENROUTER_API_KEY=your_openrouter_api_key
    N8N_WEBHOOK_URL=your_n8n_webhook_url
    ```
 4. Run the development server: `npm run dev`
@@ -39,8 +43,10 @@ This is a Customer Support AI Assistant built as a technical challenge. It handl
 ## Key Technical Decisions
 - **Next.js App Router**: Chosen for its seamless integration of API routes and React components in a single project, avoiding the need for a separate backend or edge functions setup.
 - **Supabase for DB**: Supabase was chosen for its excellent PostgreSQL capabilities. RLS policies allow for easy client-side row creation if desired, though here we primarily interact via the Next.js backend.
-- **OpenAI Structured Outputs**: Used to reliably classify customer messages into categories and decide on escalation boolean flags, without needing complex regex parsing of LLM text.
-- **n8n Webhook**: Decoupled automation allows the Next.js app to simply "fire and forget" an escalation event to n8n, which can then handle complex routing (Slack, Email, Jira, etc.) asynchronously.
+- **Jev for Triage**: TypeSafe AI's Jev is a System One decision model — it returns typed, probabilistic answers rather than generating text. All four triage signals (department, urgency, sentiment, escalation) are evaluated in a single parallel API call, keeping latency low (~70–500 ms) and removing the need for Zod schema parsing of LLM output.
+- **Escalation Logic**: Three independent conditions trigger escalation — `escalationProbability >= 0.7`, `urgencyScore >= 4`, or `sentimentScore >= 1.5`. Any one condition alone is sufficient, making the system robust to edge cases.
+- **Graceful Degradation**: If the Jev API is unavailable, a hardcoded fallback (`department: general`, `urgencyScore: 3`, `sentimentScore: 1`, `escalationProbability: 0.5`) is returned. The fallback values are deliberately below all three escalation thresholds so customers aren't incorrectly escalated during an outage.
+- **n8n Webhook**: Decoupled automation allows the Next.js app to simply "fire and forget" an escalation event to n8n, which can then handle complex routing (Slack, Email, Jira, etc.) asynchronously. The webhook payload now includes full triage signals so n8n workflows can route to the right agent queue without re-classifying.
 
 ## Assumptions
 - For the demo, conversation sessions are ephemeral or tracked via simple local state on the client side, rather than a full robust user authentication system.

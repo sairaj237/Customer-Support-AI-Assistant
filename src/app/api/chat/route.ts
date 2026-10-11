@@ -1,13 +1,13 @@
 import { createOpenAI } from '@ai-sdk/openai';
+import { generateText } from 'ai';
+import { supabase } from '@/lib/supabase';
+import { triggerEscalationWebhook } from '@/lib/n8n';
+import { classifyTicket, shouldEscalate } from '@/lib/classifier';
 
 const openrouter = createOpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY,
 });
-import { generateObject, generateText, streamText } from 'ai';
-import { z } from 'zod';
-import { supabase } from '@/lib/supabase';
-import { triggerEscalationWebhook } from '@/lib/n8n';
 
 // Simple knowledge base for the demo
 const KNOWLEDGE_BASE = `
@@ -49,18 +49,10 @@ export async function POST(req: Request) {
     }]);
 
     // 3. Classify and evaluate escalation
-    const { object: classification } = await generateObject({
-      model: openrouter('openai/gpt-oss-20b:free'),
-      schema: z.object({
-        category: z.enum(['general_question', 'technical_issue', 'billing', 'urgent']),
-        needsEscalation: z.boolean().describe("Set to true if the AI cannot solve the issue, if the user is frustrated, or if it requires manual human intervention (e.g. account verification, bug)."),
-        reason: z.string().describe("The reason for escalation, if applicable. Keep it brief. Empty string if not escalated.")
-      }),
-      prompt: `Classify the following customer message. \n\nMessage: "${latestMessage}"`,
-    });
+    const result = await classifyTicket(latestMessage);
 
     // 4. Handle Escalation
-    if (classification.needsEscalation || classification.category === 'urgent') {
+    if (shouldEscalate(result)) {
         // Mark as escalated
         await supabase
             .from('conversations')
@@ -69,16 +61,25 @@ export async function POST(req: Request) {
             
         await supabase.from('escalations').insert([{
             conversation_id: currentConversationId,
-            reason: classification.reason || 'Urgent/Unresolvable by AI',
-            classified_category: classification.category
+            reason: 'Escalated by triage classifier',
+            classified_category: result.department,
+            urgency_score: result.urgencyScore,
+            sentiment_score: result.sentimentScore,
+            escalation_probability: result.escalationProbability,
+            department: result.department,
+            used_fallback: result.usedFallback,
         }]);
 
         // Trigger Webhook
         await triggerEscalationWebhook({
             conversation_id: currentConversationId,
             customer_message: latestMessage,
-            classified_category: classification.category,
-            reason: classification.reason || 'Needs human handoff'
+            classified_category: result.department,
+            reason: 'Escalated by triage classifier',
+            urgency_score: result.urgencyScore,
+            sentiment_score: result.sentimentScore,
+            escalation_probability: result.escalationProbability,
+            department: result.department,
         });
 
         const escalationMessage = "I understand this is a complex issue. I have escalated this conversation to our human support team. They will review your request and get back to you shortly.";
@@ -98,7 +99,7 @@ export async function POST(req: Request) {
 
     // 5. Generate AI Response if no escalation
     const { text: aiResponse } = await generateText({
-      model: openrouter('openai/gpt-oss-20b:free'),
+      model: openrouter('openrouter/auto:free'),
       system: KNOWLEDGE_BASE,
       messages: messages,
     });
@@ -109,6 +110,21 @@ export async function POST(req: Request) {
         role: 'assistant',
         content: aiResponse
     }]);
+
+    // Fire-and-forget: persist triage result without blocking the response
+    void (async () => {
+        const { error: triageError } = await supabase.from('ticket_triage').insert([{
+            conversation_id: currentConversationId,
+            department: result.department,
+            urgency_score: result.urgencyScore,
+            sentiment_score: result.sentimentScore,
+            escalation_probability: result.escalationProbability,
+            used_fallback: result.usedFallback,
+        }]);
+        if (triageError) {
+            console.error('Failed to insert ticket_triage record:', triageError);
+        }
+    })();
 
     return Response.json({
         message: aiResponse,
